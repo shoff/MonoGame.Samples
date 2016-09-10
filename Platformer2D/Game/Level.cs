@@ -1,100 +1,54 @@
-﻿#region File Description
-//-----------------------------------------------------------------------------
-// Level.cs
-//
-// Microsoft XNA Community Game Platform
-// Copyright (C) Microsoft Corporation. All rights reserved.
-//-----------------------------------------------------------------------------
-#endregion
-
-using System;
-using System.Collections.Generic;
-using Microsoft.Xna.Framework;
-using Microsoft.Xna.Framework.Content;
-using Microsoft.Xna.Framework.Graphics;
-using Microsoft.Xna.Framework.Audio;
-using System.IO;
-using Microsoft.Xna.Framework.Input;
-
-namespace Platformer2D
+﻿namespace Platformer2D
 {
+    using System;
+    using System.Collections.Generic;
+    using System.IO;
+    using Microsoft.Xna.Framework;
+    using Microsoft.Xna.Framework.Audio;
+    using Microsoft.Xna.Framework.Content;
+    using Microsoft.Xna.Framework.Graphics;
+    using Microsoft.Xna.Framework.Input;
+
     /// <summary>
-    /// A uniform grid of tiles with collections of gems and enemies.
-    /// The level owns the player and controls the game's win and lose
-    /// conditions as well as scoring.
+    ///     A uniform grid of tiles with collections of gems and enemies.
+    ///     The level owns the player and controls the game's win and lose
+    ///     conditions as well as scoring.
     /// </summary>
     class Level : IDisposable
     {
-        // Physical structure of the level.
-        private Tile[,] tiles;
-        private Texture2D[] layers;
         // The layer which entities are drawn on top of.
         private const int EntityLayer = 2;
 
-        // Entities in the level.
-        public Player Player
-        {
-            get { return player; }
-        }
-        Player player;
+        private const int PointsPerSecond = 5;
+        private static readonly Point invalidPosition = new Point(-1, -1);
+        private readonly List<Enemy> enemies = new List<Enemy>();
+        private Point exit = invalidPosition;
 
-        private List<Gem> gems = new List<Gem>();
-        private List<Enemy> enemies = new List<Enemy>();
+        private readonly SoundEffect exitReachedSound;
+
+        private readonly List<Gem> gems = new List<Gem>();
+        private readonly Texture2D[] layers;
+
+        // Level game state.
+        private readonly Random random = new Random(354668); // Arbitrary, but constant seed
 
         // Key locations in the level.        
         private Vector2 start;
-        private Point exit = InvalidPosition;
-        private static readonly Point InvalidPosition = new Point(-1, -1);
-
-        // Level game state.
-        private Random random = new Random(354668); // Arbitrary, but constant seed
-
-        public int Score
-        {
-            get { return score; }
-        }
-        int score;
-
-        public bool ReachedExit
-        {
-            get { return reachedExit; }
-        }
-        bool reachedExit;
-
-        public TimeSpan TimeRemaining
-        {
-            get { return timeRemaining; }
-        }
-        TimeSpan timeRemaining;
-
-        private const int PointsPerSecond = 5;
-
-        // Level content.        
-        public ContentManager Content
-        {
-            get { return content; }
-        }
-        ContentManager content;
-
-        private SoundEffect exitReachedSound;
-
-        #region Loading
+        // Physical structure of the level.
+        private Tile[,] tiles;
 
         /// <summary>
         /// Constructs a new level.
         /// </summary>
-        /// <param name="serviceProvider">
-        /// The service provider that will be used to construct a ContentManager.
-        /// </param>
-        /// <param name="fileStream">
-        /// A stream containing the tile data.
-        /// </param>
+        /// <param name="serviceProvider">The service provider that will be used to construct a ContentManager.</param>
+        /// <param name="fileStream">A stream containing the tile data.</param>
+        /// <param name="levelIndex">Index of the level.</param>
         public Level(IServiceProvider serviceProvider, Stream fileStream, int levelIndex)
         {
             // Create a new content manager to load content used just by this level.
-            content = new ContentManager(serviceProvider, "Content");
+            this.Content = new ContentManager(serviceProvider, "Content");
 
-            timeRemaining = TimeSpan.FromMinutes(2.0);
+            this.TimeRemaining = TimeSpan.FromMinutes(2.0);
 
             LoadTiles(fileStream);
 
@@ -112,29 +66,70 @@ namespace Platformer2D
             exitReachedSound = Content.Load<SoundEffect>("Sounds/ExitReached");
         }
 
+        // Entities in the level.
+        public Player Player { get; private set; }
+
+        public int Score { get; private set; }
+
+        public bool ReachedExit { get; private set; }
+
+        public TimeSpan TimeRemaining { get; private set; }
+
+        // Level content.        
+        public ContentManager Content { get; private set; }
+
         /// <summary>
-        /// Iterates over every tile in the structure file and loads its
-        /// appearance and behavior. This method also validates that the
-        /// file is well-formed with a player start point, exit, etc.
+        ///     Width of level measured in tiles.
+        /// </summary>
+        public int Width
+        {
+            get { return tiles.GetLength(0); }
+        }
+
+        /// <summary>
+        ///     Height of the level measured in tiles.
+        /// </summary>
+        public int Height
+        {
+            get { return tiles.GetLength(1); }
+        }
+
+        /// <summary>
+        ///     Unloads the level content.
+        /// </summary>
+        public void Dispose()
+        {
+            Content.Unload();
+        }
+
+        /// <summary>
+        ///     Iterates over every tile in the structure file and loads its
+        ///     appearance and behavior. This method also validates that the
+        ///     file is well-formed with a player start point, exit, etc.
         /// </summary>
         /// <param name="fileStream">
-        /// A stream containing the tile data.
+        ///     A stream containing the tile data.
         /// </param>
         private void LoadTiles(Stream fileStream)
         {
             // Load the level and ensure all of the lines are the same length.
-            int width;
+            int width = 0;
             List<string> lines = new List<string>();
             using (StreamReader reader = new StreamReader(fileStream))
             {
                 string line = reader.ReadLine();
-                width = line.Length;
-                while (line != null)
+                if (line != null)
                 {
-                    lines.Add(line);
-                    if (line.Length != width)
-                        throw new Exception(String.Format("The length of line {0} is different from all preceeding lines.", lines.Count));
-                    line = reader.ReadLine();
+                    width = line.Length;
+                    while (line != null)
+                    {
+                        lines.Add(line);
+                        if (line.Length != width)
+                        {
+                            throw new Exception(string.Format("The length of line {0} is different from all preceeding lines.", lines.Count));
+                        }
+                        line = reader.ReadLine();
+                    }
                 }
             }
 
@@ -154,24 +149,27 @@ namespace Platformer2D
 
             // Verify that the level has a beginning and an end.
             if (Player == null)
+            {
                 throw new NotSupportedException("A level must have a starting point.");
-            if (exit == InvalidPosition)
+            }
+            if (exit == invalidPosition)
+            {
                 throw new NotSupportedException("A level must have an exit.");
-
+            }
         }
 
         /// <summary>
-        /// Loads an individual tile's appearance and behavior.
+        ///     Loads an individual tile's appearance and behavior.
         /// </summary>
         /// <param name="tileType">
-        /// The character loaded from the structure file which
-        /// indicates what should be loaded.
+        ///     The character loaded from the structure file which
+        ///     indicates what should be loaded.
         /// </param>
         /// <param name="x">
-        /// The X location of this tile in tile space.
+        ///     The X location of this tile in tile space.
         /// </param>
         /// <param name="y">
-        /// The Y location of this tile in tile space.
+        ///     The Y location of this tile in tile space.
         /// </param>
         /// <returns>The loaded tile.</returns>
         private Tile LoadTile(char tileType, int x, int y)
@@ -222,19 +220,20 @@ namespace Platformer2D
 
                 // Unknown tile type character
                 default:
-                    throw new NotSupportedException(String.Format("Unsupported tile type character '{0}' at position {1}, {2}.", tileType, x, y));
+                    throw new NotSupportedException(string.Format("Unsupported tile type character '{0}' at position {1}, {2}.",
+                        tileType, x, y));
             }
         }
 
         /// <summary>
-        /// Creates a new tile. The other tile loading methods typically chain to this
-        /// method after performing their special logic.
+        ///     Creates a new tile. The other tile loading methods typically chain to this
+        ///     method after performing their special logic.
         /// </summary>
         /// <param name="name">
-        /// Path to a tile texture relative to the Content/Tiles directory.
+        ///     Path to a tile texture relative to the Content/Tiles directory.
         /// </param>
         /// <param name="collision">
-        /// The tile collision type for the new tile.
+        ///     The tile collision type for the new tile.
         /// </param>
         /// <returns>The new tile.</returns>
         private Tile LoadTile(string name, TileCollision collision)
@@ -246,13 +245,11 @@ namespace Platformer2D
         /// <summary>
         /// Loads a tile with a random appearance.
         /// </summary>
-        /// <param name="baseName">
-        /// The content name prefix for this group of tile variations. Tile groups are
-        /// name LikeThis0.png and LikeThis1.png and LikeThis2.png.
-        /// </param>
-        /// <param name="variationCount">
-        /// The number of variations in this group.
-        /// </param>
+        /// <param name="baseName">The content name prefix for this group of tile variations. Tile groups are
+        /// name LikeThis0.png and LikeThis1.png and LikeThis2.png.</param>
+        /// <param name="variationCount">The number of variations in this group.</param>
+        /// <param name="collision">The collision.</param>
+        /// <returns></returns>
         private Tile LoadVarietyTile(string baseName, int variationCount, TileCollision collision)
         {
             int index = random.Next(variationCount);
@@ -261,26 +258,30 @@ namespace Platformer2D
 
 
         /// <summary>
-        /// Instantiates a player, puts him in the level, and remembers where to put him when he is resurrected.
+        ///     Instantiates a player, puts him in the level, and remembers where to put him when he is resurrected.
         /// </summary>
         private Tile LoadStartTile(int x, int y)
         {
             if (Player != null)
+            {
                 throw new NotSupportedException("A level may only have one starting point.");
+            }
 
-            start = RectangleExtensions.GetBottomCenter(GetBounds(x, y));
-            player = new Player(this, start);
+            start = this.GetBounds(x, y).GetBottomCenter();
+            this.Player = new Player(this, start);
 
             return new Tile(null, TileCollision.Passable);
         }
 
         /// <summary>
-        /// Remembers the location of the level's exit.
+        ///     Remembers the location of the level's exit.
         /// </summary>
         private Tile LoadExitTile(int x, int y)
         {
-            if (exit != InvalidPosition)
+            if (exit != invalidPosition)
+            {
                 throw new NotSupportedException("A level may only have one exit.");
+            }
 
             exit = GetBounds(x, y).Center;
 
@@ -288,18 +289,18 @@ namespace Platformer2D
         }
 
         /// <summary>
-        /// Instantiates an enemy and puts him in the level.
+        ///     Instantiates an enemy and puts him in the level.
         /// </summary>
         private Tile LoadEnemyTile(int x, int y, string spriteSet)
         {
-            Vector2 position = RectangleExtensions.GetBottomCenter(GetBounds(x, y));
+            Vector2 position = this.GetBounds(x, y).GetBottomCenter();
             enemies.Add(new Enemy(this, position, spriteSet));
 
             return new Tile(null, TileCollision.Passable);
         }
 
         /// <summary>
-        /// Instantiates a gem and puts it in the level.
+        ///     Instantiates a gem and puts it in the level.
         /// </summary>
         private Tile LoadGemTile(int x, int y)
         {
@@ -310,71 +311,43 @@ namespace Platformer2D
         }
 
         /// <summary>
-        /// Unloads the level content.
-        /// </summary>
-        public void Dispose()
-        {
-            Content.Unload();
-        }
-
-        #endregion
-
-        #region Bounds and collision
-
-        /// <summary>
-        /// Gets the collision mode of the tile at a particular location.
-        /// This method handles tiles outside of the levels boundries by making it
-        /// impossible to escape past the left or right edges, but allowing things
-        /// to jump beyond the top of the level and fall off the bottom.
+        ///     Gets the collision mode of the tile at a particular location.
+        ///     This method handles tiles outside of the levels boundries by making it
+        ///     impossible to escape past the left or right edges, but allowing things
+        ///     to jump beyond the top of the level and fall off the bottom.
         /// </summary>
         public TileCollision GetCollision(int x, int y)
         {
             // Prevent escaping past the level ends.
             if (x < 0 || x >= Width)
+            {
                 return TileCollision.Impassable;
+            }
             // Allow jumping past the level top and falling through the bottom.
             if (y < 0 || y >= Height)
+            {
                 return TileCollision.Passable;
+            }
 
             return tiles[x, y].Collision;
         }
 
         /// <summary>
-        /// Gets the bounding rectangle of a tile in world space.
-        /// </summary>        
+        ///     Gets the bounding rectangle of a tile in world space.
+        /// </summary>
         public Rectangle GetBounds(int x, int y)
         {
-            return new Rectangle(x * Tile.Width, y * Tile.Height, Tile.Width, Tile.Height);
+            return new Rectangle(x*Tile.Width, y*Tile.Height, Tile.Width, Tile.Height);
         }
 
         /// <summary>
-        /// Width of level measured in tiles.
-        /// </summary>
-        public int Width
-        {
-            get { return tiles.GetLength(0); }
-        }
-
-        /// <summary>
-        /// Height of the level measured in tiles.
-        /// </summary>
-        public int Height
-        {
-            get { return tiles.GetLength(1); }
-        }
-
-        #endregion
-
-        #region Update
-
-        /// <summary>
-        /// Updates all objects in the world, performs collision between them,
-        /// and handles the time limit with scoring.
+        ///     Updates all objects in the world, performs collision between them,
+        ///     and handles the time limit with scoring.
         /// </summary>
         public void Update(
-            GameTime gameTime, 
-            KeyboardState keyboardState, 
-            GamePadState gamePadState, 
+            GameTime gameTime,
+            KeyboardState keyboardState,
+            GamePadState gamePadState,
             AccelerometerState accelState,
             DisplayOrientation orientation)
         {
@@ -387,20 +360,22 @@ namespace Platformer2D
             else if (ReachedExit)
             {
                 // Animate the time being converted into points.
-                int seconds = (int)Math.Round(gameTime.ElapsedGameTime.TotalSeconds * 100.0f);
-                seconds = Math.Min(seconds, (int)Math.Ceiling(TimeRemaining.TotalSeconds));
-                timeRemaining -= TimeSpan.FromSeconds(seconds);
-                score += seconds * PointsPerSecond;
+                int seconds = (int) Math.Round(gameTime.ElapsedGameTime.TotalSeconds*100.0f);
+                seconds = Math.Min(seconds, (int) Math.Ceiling(TimeRemaining.TotalSeconds));
+                this.TimeRemaining -= TimeSpan.FromSeconds(seconds);
+                this.Score += seconds*PointsPerSecond;
             }
             else
             {
-                timeRemaining -= gameTime.ElapsedGameTime;
+                this.TimeRemaining -= gameTime.ElapsedGameTime;
                 Player.Update(gameTime, keyboardState, gamePadState, accelState, orientation);
                 UpdateGems(gameTime);
 
                 // Falling off the bottom of the level kills the player.
-                if (Player.BoundingRectangle.Top >= Height * Tile.Height)
-                    OnPlayerKilled(null);
+                if (Player.BoundingRectangle.Top >= Height*Tile.Height)
+                {
+                    this.OnPlayerKilled(null);
+                }
 
                 UpdateEnemies(gameTime);
 
@@ -416,12 +391,14 @@ namespace Platformer2D
             }
 
             // Clamp the time remaining at zero.
-            if (timeRemaining < TimeSpan.Zero)
-                timeRemaining = TimeSpan.Zero;
+            if (this.TimeRemaining < TimeSpan.Zero)
+            {
+                this.TimeRemaining = TimeSpan.Zero;
+            }
         }
 
         /// <summary>
-        /// Animates each gem and checks to allows the player to collect them.
+        ///     Animates each gem and checks to allows the player to collect them.
         /// </summary>
         private void UpdateGems(GameTime gameTime)
         {
@@ -440,7 +417,7 @@ namespace Platformer2D
         }
 
         /// <summary>
-        /// Animates each enemy and allow them to kill the player.
+        ///     Animates each enemy and allow them to kill the player.
         /// </summary>
         private void UpdateEnemies(GameTime gameTime)
         {
@@ -457,23 +434,23 @@ namespace Platformer2D
         }
 
         /// <summary>
-        /// Called when a gem is collected.
+        ///     Called when a gem is collected.
         /// </summary>
         /// <param name="gem">The gem that was collected.</param>
         /// <param name="collectedBy">The player who collected this gem.</param>
         private void OnGemCollected(Gem gem, Player collectedBy)
         {
-            score += Gem.PointValue;
+            this.Score += Gem.PointValue;
 
             gem.OnCollected(collectedBy);
         }
 
         /// <summary>
-        /// Called when the player is killed.
+        ///     Called when the player is killed.
         /// </summary>
         /// <param name="killedBy">
-        /// The enemy who killed the player. This is null if the player was not killed by an
-        /// enemy, such as when a player falls into a hole.
+        ///     The enemy who killed the player. This is null if the player was not killed by an
+        ///     enemy, such as when a player falls into a hole.
         /// </param>
         private void OnPlayerKilled(Enemy killedBy)
         {
@@ -481,51 +458,55 @@ namespace Platformer2D
         }
 
         /// <summary>
-        /// Called when the player reaches the level's exit.
+        ///     Called when the player reaches the level's exit.
         /// </summary>
         private void OnExitReached()
         {
             Player.OnReachedExit();
             exitReachedSound.Play();
-            reachedExit = true;
+            this.ReachedExit = true;
         }
 
         /// <summary>
-        /// Restores the player to the starting point to try the level again.
+        ///     Restores the player to the starting point to try the level again.
         /// </summary>
         public void StartNewLife()
         {
             Player.Reset(start);
         }
 
-        #endregion
-
-        #region Draw
-
         /// <summary>
-        /// Draw everything in the level from background to foreground.
+        ///     Draw everything in the level from background to foreground.
         /// </summary>
         public void Draw(GameTime gameTime, SpriteBatch spriteBatch)
         {
             for (int i = 0; i <= EntityLayer; ++i)
-                spriteBatch.Draw(layers[i], Vector2.Zero, Color.White);
+            {
+                spriteBatch.Draw(this.layers[i], Vector2.Zero, Color.White);
+            }
 
             DrawTiles(spriteBatch);
 
             foreach (Gem gem in gems)
+            {
                 gem.Draw(gameTime, spriteBatch);
+            }
 
             Player.Draw(gameTime, spriteBatch);
 
             foreach (Enemy enemy in enemies)
+            {
                 enemy.Draw(gameTime, spriteBatch);
+            }
 
             for (int i = EntityLayer + 1; i < layers.Length; ++i)
-                spriteBatch.Draw(layers[i], Vector2.Zero, Color.White);
+            {
+                spriteBatch.Draw(this.layers[i], Vector2.Zero, Color.White);
+            }
         }
 
         /// <summary>
-        /// Draws each tile in the level.
+        ///     Draws each tile in the level.
         /// </summary>
         private void DrawTiles(SpriteBatch spriteBatch)
         {
@@ -539,13 +520,11 @@ namespace Platformer2D
                     if (texture != null)
                     {
                         // Draw it in screen space.
-                        Vector2 position = new Vector2(x, y) * Tile.Size;
+                        Vector2 position = new Vector2(x, y)*Tile.Size;
                         spriteBatch.Draw(texture, position, Color.White);
                     }
                 }
             }
         }
-
-        #endregion
     }
 }
